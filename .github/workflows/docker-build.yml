@@ -22,14 +22,29 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ secrets.OCI_REGION }}    # ex.: gru.ocir.io
-          username: ${{ secrets.OCI_USER }}      # ex.: meutenancy/usuario
-          password: ${{ secrets.OCI_PASS }}      # Auth Token gerado no OCI
+          username: ${{ secrets.OCI_USER }}      # ex.: grj71pgur80e/usuario@empresa.com
+          password: ${{ secrets.OCI_PASS }}      # Auth Token
 
-      - name: Build and Push Docker image
+      - name: Define image name
+        id: vars
+        run: |
+          IMAGE_NAME="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/stage/frontend_teste/frontend_pdv"
+          IMAGE_TAG="build-${GITHUB_RUN_NUMBER}"
+          echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          echo "📦 Imagem será: $IMAGE_NAME:$IMAGE_TAG"
+
+      - name: Build and Push Docker image (multi-stage)
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: |
-            ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/minha-app:latest
-            ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/minha-app:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+            ${{ env.IMAGE_NAME }}:latest
+
+      - name: Show pushed image
+        run: |
+          echo "✅ Imagem publicada com sucesso:"
+          echo "${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
+          echo "${{ env.IMAGE_NAME }}:latest"
