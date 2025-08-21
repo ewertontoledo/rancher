@@ -7,5 +7,5 @@ app.get("/", (req, res) => {
 
 const port = process.env.PORT || 9000;
 app.listen(port, () => {
-  console.log(`App running on http://localhost:${port}`);
+  console.log(`App running on stage-smart.surf.com.br:${port}`);
 });
