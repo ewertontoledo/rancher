@@ -26,5 +26,5 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/prod/frontend/frontend_pdv:latest
-            ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/prod/frontend/frontend_pdv:${{ github.sha }}
+            ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest
+            ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:${{ github.sha }}
