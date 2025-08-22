@@ -26,7 +26,7 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest
+            ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:v1.0.0
 
       - name: Configurar Kubeconfig
         run: |
@@ -63,7 +63,7 @@ jobs:
 
           kubectl -n $NAMESPACE get deployment $DEPLOYMENT -o yaml > /tmp/${DEPLOYMENT}_prev.yaml || true
 
-          # gerar Deployment manifest sem EOF
+          # Deployment
           echo "apiVersion: apps/v1" > /tmp/deployment.yaml
           echo "kind: Deployment" >> /tmp/deployment.yaml
           echo "metadata:" >> /tmp/deployment.yaml
@@ -86,7 +86,7 @@ jobs:
           echo "        ports:" >> /tmp/deployment.yaml
           echo "        - containerPort: 9000" >> /tmp/deployment.yaml
 
-          # gerar Service manifest sem EOF
+          # Service
           echo "apiVersion: v1" > /tmp/service.yaml
           echo "kind: Service" >> /tmp/service.yaml
           echo "metadata:" >> /tmp/service.yaml
@@ -107,8 +107,13 @@ jobs:
 
           echo ">> Verificando rollout..."
           if ! kubectl -n $NAMESPACE rollout status deployment/$DEPLOYMENT --timeout=60s; then
-            echo "❌ Rollout falhou! Restaurando versão anterior..."
-            kubectl apply -f /tmp/${DEPLOYMENT}_prev.yaml || true
-            kubectl -n $NAMESPACE rollout undo deployment/$DEPLOYMENT || true
+            echo "❌ Rollout falhou!"
+            if kubectl -n $NAMESPACE rollout history deployment/$DEPLOYMENT >/dev/null 2>&1; then
+              echo ">> Restaurando versão anterior..."
+              kubectl apply -f /tmp/${DEPLOYMENT}_prev.yaml || true
+              kubectl -n $NAMESPACE rollout undo deployment/$DEPLOYMENT || true
+            else
+              echo ">> Nenhuma versão anterior encontrada, nada para restaurar."
+            fi
             exit 1
           fi
