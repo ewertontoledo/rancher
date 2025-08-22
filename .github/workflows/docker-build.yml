@@ -31,26 +31,24 @@ jobs:
       - name: Configurar Kubeconfig
         run: |
           mkdir -p /tmp/kube
-          cat > /tmp/kube/config <<EOL
-apiVersion: v1
-kind: Config
-clusters:
-- cluster:
-    server: ${{ secrets.RANCHER_URL }}/k8s/clusters/local
-    insecure-skip-tls-verify: true
-  name: local
-contexts:
-- context:
-    cluster: local
-    user: rancher-user
-    namespace: local
-  name: local
-current-context: local
-users:
-- name: rancher-user
-  user:
-    token: ${{ secrets.RANCHER_TOKEN }}
-EOL
+          echo "apiVersion: v1" > /tmp/kube/config
+          echo "kind: Config" >> /tmp/kube/config
+          echo "clusters:" >> /tmp/kube/config
+          echo "- cluster:" >> /tmp/kube/config
+          echo "    server: ${{ secrets.RANCHER_URL }}/k8s/clusters/local" >> /tmp/kube/config
+          echo "    insecure-skip-tls-verify: true" >> /tmp/kube/config
+          echo "  name: local" >> /tmp/kube/config
+          echo "contexts:" >> /tmp/kube/config
+          echo "- context:" >> /tmp/kube/config
+          echo "    cluster: local" >> /tmp/kube/config
+          echo "    user: rancher-user" >> /tmp/kube/config
+          echo "    namespace: local" >> /tmp/kube/config
+          echo "  name: local" >> /tmp/kube/config
+          echo "current-context: local" >> /tmp/kube/config
+          echo "users:" >> /tmp/kube/config
+          echo "- name: rancher-user" >> /tmp/kube/config
+          echo "  user:" >> /tmp/kube/config
+          echo "    token: ${{ secrets.RANCHER_TOKEN }}" >> /tmp/kube/config
           chmod 600 /tmp/kube/config
           echo "KUBECONFIG=/tmp/kube/config" >> $GITHUB_ENV
 
@@ -63,10 +61,8 @@ EOL
 
           echo ">> Fazendo deploy da imagem $IMAGE no deployment $DEPLOYMENT"
 
-          # backup do estado anterior
           kubectl -n $NAMESPACE get deployment $DEPLOYMENT -o yaml > /tmp/${DEPLOYMENT}_prev.yaml || true
 
-          # aplica manifests
           kubectl apply -f .k8s/deployment.yaml
           kubectl apply -f .k8s/service.yaml
 
@@ -74,4 +70,6 @@ EOL
           if ! kubectl -n $NAMESPACE rollout status deployment/$DEPLOYMENT --timeout=60s; then
             echo "❌ Rollout falhou! Restaurando versão anterior..."
             kubectl apply -f /tmp/${DEPLOYMENT}_prev.yaml || true
-            kubectl -n $NAMESPACE rollout undo dep
+            kubectl -n $NAMESPACE rollout undo deployment/$DEPLOYMENT || true
+            exit 1
+          fi
