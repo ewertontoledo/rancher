@@ -1,7 +1,9 @@
-name: Build, Push and Deploy (local Rancher)
+name: Build and Deploy OCI
 
 on:
-  workflow_dispatch: # dispara manualmente no Actions
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   build-deploy:
@@ -14,74 +16,97 @@ jobs:
 
       - uses: docker/login-action@v3
         with:
-          registry: ${{ secrets.OCI_REGION }}
-          username: ${{ secrets.OCI_USER }}
-          password: ${{ secrets.OCI_PASS }}
+          registry: ${{ secrets.OCI_REGION }}      # ex.: gru.ocir.io
+          username: ${{ secrets.OCI_USER }}        # ex.: tenancy/usuario@empresa.com
+          password: ${{ secrets.OCI_PASS }}        # Auth Token
 
-      - name: Build & Push
+      - name: Build & Push Image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest
+          tags: |
+            ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest
 
-      - name: Deploy no Rancher Local
+      - name: Configurar Kubeconfig
         run: |
+          mkdir -p ~/.kube
+          cat <<EOF > ~/.kube/config
+          apiVersion: v1
+          kind: Config
+          clusters:
+          - cluster:
+              server: ${{ secrets.RANCHER_URL }}/k8s/clusters/local
+              insecure-skip-tls-verify: true
+            name: local
+          contexts:
+          - context:
+              cluster: local
+              user: rancher-user
+            name: local
+          current-context: local
+          users:
+          - name: rancher-user
+            user:
+              token: ${{ secrets.RANCHER_TOKEN }}
+          EOF
+
+      - name: Deploy no Rancher (via kubectl)
+        run: |
+          set -e
+          NAMESPACE=local
+          DEPLOYMENT=poc-teste-app
           IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest"
-          PROJECT_ID="1a7"   # seu environment teste-externo
-          STACK_NAME="stack-teste"
-          SERVICE_NAME="app-poc"
 
-          echo ">> Criando stack se não existir..."
-          STACK_ID=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-            "http://localhost:8080/v2-beta/projects/$PROJECT_ID/stacks?name=$STACK_NAME" \
-            | jq -r '.data[0].id')
+          echo ">> Fazendo deploy da imagem $IMAGE no deployment $DEPLOYMENT"
 
-          if [ "$STACK_ID" = "null" ] || [ -z "$STACK_ID" ]; then
-            STACK_ID=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              -X POST -H "Content-Type: application/json" \
-              -d "{\"name\":\"$STACK_NAME\"}" \
-              "http://localhost:8080/v2-beta/projects/$PROJECT_ID/stacks" \
-              | jq -r '.id')
-            echo "Criada nova stack: $STACK_ID"
-          else
-            echo "Stack já existe: $STACK_ID"
-          fi
+          # backup da versão atual para rollback
+          kubectl -n $NAMESPACE get deployment $DEPLOYMENT -o yaml > /tmp/${DEPLOYMENT}_prev.yaml || true
 
-          echo ">> Criando ou atualizando service $SERVICE_NAME..."
-          SERVICE_ID=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-            "http://localhost:8080/v2-beta/projects/$PROJECT_ID/services?name=$SERVICE_NAME" \
-            | jq -r '.data[0].id')
+          # aplicar novo deployment + service
+          cat <<EOF | kubectl apply -f -
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: $DEPLOYMENT
+            namespace: $NAMESPACE
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: $DEPLOYMENT
+            template:
+              metadata:
+                labels:
+                  app: $DEPLOYMENT
+              spec:
+                containers:
+                  - name: container-0
+                    image: $IMAGE
+                    imagePullPolicy: Always
+                    ports:
+                      - containerPort: 9000
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: ${DEPLOYMENT}-svc
+            namespace: $NAMESPACE
+          spec:
+            selector:
+              app: $DEPLOYMENT
+            ports:
+              - name: http
+                protocol: TCP
+                port: 9000
+                targetPort: 9000
+            type: NodePort
+          EOF
 
-          if [ "$SERVICE_ID" = "null" ] || [ -z "$SERVICE_ID" ]; then
-            echo "Service não existe. Criando..."
-            SERVICE_ID=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              -X POST -H "Content-Type: application/json" \
-              -d "{
-                \"name\":\"$SERVICE_NAME\",
-                \"stackId\":\"$STACK_ID\",
-                \"scale\":1,
-                \"launchConfig\":{
-                  \"imageUuid\":\"docker:$IMAGE\",
-                  \"ports\":[\"9000:9000/tcp\"]
-                }
-              }" \
-              "http://localhost:8080/v2-beta/projects/$PROJECT_ID/services" \
-              | jq -r '.id')
-            echo "Service criado: $SERVICE_ID"
-
-            echo ">> Ativando service..."
-            curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              -X POST "http://localhost:8080/v2-beta/projects/$PROJECT_ID/services/$SERVICE_ID/?action=activate"
-          else
-            echo "Service já existe. Atualizando imagem..."
-            curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              -X PUT -H "Content-Type: application/json" \
-              -d "{
-                \"launchConfig\":{
-                  \"imageUuid\":\"docker:$IMAGE\",
-                  \"ports\":[\"9000:9000/tcp\"]
-                }
-              }" \
-              "http://localhost:8080/v2-beta/projects/$PROJECT_ID/services/$SERVICE_ID"
+          echo ">> Verificando rollout..."
+          if ! kubectl -n $NAMESPACE rollout status deployment/$DEPLOYMENT --timeout=60s; then
+            echo "❌ Rollout falhou! Restaurando versão anterior..."
+            kubectl apply -f /tmp/${DEPLOYMENT}_prev.yaml || true
+            kubectl -n $NAMESPACE rollout undo deployment/$DEPLOYMENT || true
+            exit 1
           fi
