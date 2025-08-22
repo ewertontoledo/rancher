@@ -63,8 +63,47 @@ jobs:
 
           kubectl -n $NAMESPACE get deployment $DEPLOYMENT -o yaml > /tmp/${DEPLOYMENT}_prev.yaml || true
 
-          kubectl apply -f .k8s/deployment.yaml
-          kubectl apply -f .k8s/service.yaml
+          # gerar Deployment manifest sem EOF
+          echo "apiVersion: apps/v1" > /tmp/deployment.yaml
+          echo "kind: Deployment" >> /tmp/deployment.yaml
+          echo "metadata:" >> /tmp/deployment.yaml
+          echo "  name: $DEPLOYMENT" >> /tmp/deployment.yaml
+          echo "  namespace: $NAMESPACE" >> /tmp/deployment.yaml
+          echo "spec:" >> /tmp/deployment.yaml
+          echo "  replicas: 1" >> /tmp/deployment.yaml
+          echo "  selector:" >> /tmp/deployment.yaml
+          echo "    matchLabels:" >> /tmp/deployment.yaml
+          echo "      app: $DEPLOYMENT" >> /tmp/deployment.yaml
+          echo "  template:" >> /tmp/deployment.yaml
+          echo "    metadata:" >> /tmp/deployment.yaml
+          echo "      labels:" >> /tmp/deployment.yaml
+          echo "        app: $DEPLOYMENT" >> /tmp/deployment.yaml
+          echo "    spec:" >> /tmp/deployment.yaml
+          echo "      containers:" >> /tmp/deployment.yaml
+          echo "      - name: container-0" >> /tmp/deployment.yaml
+          echo "        image: $IMAGE" >> /tmp/deployment.yaml
+          echo "        imagePullPolicy: Always" >> /tmp/deployment.yaml
+          echo "        ports:" >> /tmp/deployment.yaml
+          echo "        - containerPort: 9000" >> /tmp/deployment.yaml
+
+          # gerar Service manifest sem EOF
+          echo "apiVersion: v1" > /tmp/service.yaml
+          echo "kind: Service" >> /tmp/service.yaml
+          echo "metadata:" >> /tmp/service.yaml
+          echo "  name: ${DEPLOYMENT}-svc" >> /tmp/service.yaml
+          echo "  namespace: $NAMESPACE" >> /tmp/service.yaml
+          echo "spec:" >> /tmp/service.yaml
+          echo "  selector:" >> /tmp/service.yaml
+          echo "    app: $DEPLOYMENT" >> /tmp/service.yaml
+          echo "  ports:" >> /tmp/service.yaml
+          echo "  - name: http" >> /tmp/service.yaml
+          echo "    protocol: TCP" >> /tmp/service.yaml
+          echo "    port: 9000" >> /tmp/service.yaml
+          echo "    targetPort: 9000" >> /tmp/service.yaml
+          echo "  type: NodePort" >> /tmp/service.yaml
+
+          kubectl apply -f /tmp/deployment.yaml
+          kubectl apply -f /tmp/service.yaml
 
           echo ">> Verificando rollout..."
           if ! kubectl -n $NAMESPACE rollout status deployment/$DEPLOYMENT --timeout=60s; then
