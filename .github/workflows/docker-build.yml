@@ -30,33 +30,19 @@ jobs:
       - name: Deploy to Rancher 1.6 (externo)
         run: |
           set -euo pipefail
-
           IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest"
           NAME="app-poc"
-          ENV_NAME="surf-productin-externo"
-
-          echo "🔎 Buscando PROJECT_ID do Rancher..."
-          PROJECT_ID=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-            "${{ secrets.RANCHER_URL }}/v2-beta/projects" \
-            | jq -r ".data[] | select(.name==\"$ENV_NAME\") | .id")
-
-          if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" == "null" ]; then
-            echo "❌ Não foi possível localizar PROJECT_ID para o ambiente $ENV_NAME"
-            exit 1
-          fi
-
+          PROJECT_ID="1a120"
           echo "✅ Usando PROJECT_ID=$PROJECT_ID"
 
           # Buscar se container já existe
           CONTAINERS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
             "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers")
-
           CONTAINER=$(echo "$CONTAINERS" | jq -r ".data[] | select(.name==\"$NAME\")")
 
           if [ -n "$CONTAINER" ] && [ "$CONTAINER" != "null" ]; then
             CONTAINER_ID=$(echo "$CONTAINER" | jq -r ".id")
             OLD_IMAGE=$(echo "$CONTAINER" | jq -r ".imageUuid" | sed 's/^docker://')
-
             echo "📦 Container $NAME já existe (ID=$CONTAINER_ID)"
             echo "Imagem atual: $OLD_IMAGE"
             echo "Atualizando para nova imagem: $IMAGE"
@@ -72,10 +58,8 @@ jobs:
 
             echo "⏳ Aguardando container subir..."
             sleep 20
-
             STATUS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
               "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers/$CONTAINER_ID" | jq -r ".state")
-
             if [ "$STATUS" != "running" ]; then
               echo "⚠️ Novo deploy falhou (status=$STATUS). Fazendo rollback para imagem antiga: $OLD_IMAGE"
               curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
@@ -89,7 +73,6 @@ jobs:
               exit 1
             fi
             echo "✅ Deploy atualizado com sucesso."
-
           else
             echo "🚀 Container $NAME não existe. Criando..."
             curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
