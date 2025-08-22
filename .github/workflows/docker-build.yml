@@ -36,13 +36,12 @@ jobs:
           ENV_NAME="surf-productin-externo"
 
           echo "🔎 Buscando PROJECT_ID do Rancher..."
-          PROJECTS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-            "${{ secrets.RANCHER_URL }}/v2-beta/projects")
+          PROJECT_ID=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
+            "${{ secrets.RANCHER_URL }}/v2-beta/projects" \
+            | jq -r ".data[] | select(.name==\"$ENV_NAME\") | .id")
 
-          PROJECT_ID=$(echo "$PROJECTS" | jq -r ".data[] | select(.name==\"$ENV_NAME\") | .id")
-
-          if [ -z "$PROJECT_ID" ]; then
-            echo "❌ Não foi possível localizar o PROJECT_ID para o ambiente $ENV_NAME"
+          if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" == "null" ]; then
+            echo "❌ Não foi possível localizar PROJECT_ID para o ambiente $ENV_NAME"
             exit 1
           fi
 
@@ -72,7 +71,7 @@ jobs:
               }"
 
             echo "⏳ Aguardando container subir..."
-            sleep 25
+            sleep 20
 
             STATUS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
               "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers/$CONTAINER_ID" | jq -r ".state")
@@ -104,4 +103,5 @@ jobs:
                 \"publishAllPorts\": false,
                 \"ports\": [\"9000:9000/tcp\"]
               }"
+            echo "✅ Container criado com sucesso."
           fi
