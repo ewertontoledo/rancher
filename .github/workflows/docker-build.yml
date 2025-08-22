@@ -33,53 +33,54 @@ jobs:
           IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest"
           NAME="app-poc"
           PROJECT_ID="1a120"
+          AUTH="${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}"
+          URL="${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID"
 
           echo "✅ Usando PROJECT_ID=$PROJECT_ID"
 
-          # Buscar Service pelo nome
-          SERVICE_ID=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-            "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/services" \
+          # Buscar container pelo nome
+          CONTAINER_ID=$(curl -s -u "$AUTH" "$URL/containers" \
             | jq -r --arg NAME "$NAME" '.data[] | select(.name==$NAME) | .id')
 
-          if [ -n "$SERVICE_ID" ]; then
-            echo "📦 Serviço $NAME encontrado (ID=$SERVICE_ID). Fazendo upgrade..."
+          if [ -n "$CONTAINER_ID" ] && [ "$CONTAINER_ID" != "null" ]; then
+            echo "📦 Container $NAME encontrado (ID=$CONTAINER_ID). Atualizando imagem..."
 
-            curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              -X POST "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/services/$SERVICE_ID?action=upgrade" \
-              -H 'Content-Type: application/json' \
-              -d "{
-                \"inServiceStrategy\": {
-                  \"launchConfig\": {
-                    \"imageUuid\": \"docker:$IMAGE\",
-                    \"restartPolicy\": {\"name\": \"always\"},
-                    \"alwaysPullImage\": true
-                  }
-                }
-              }"
+            # Parar o container
+            curl -s -u "$AUTH" -X POST "$URL/containers/$CONTAINER_ID?action=stop"
+            sleep 5
 
-            echo "⏳ Aguardando upgrade..."
-            sleep 15
+            # Remover o container
+            curl -s -u "$AUTH" -X DELETE "$URL/containers/$CONTAINER_ID"
+            sleep 5
 
-            curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              -X POST "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/services/$SERVICE_ID?action=finishupgrade"
-
-            echo "✅ Serviço $NAME atualizado com sucesso."
-          else
-            echo "🚀 Serviço $NAME não existe. Criando..."
-            curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              -X POST "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/services" \
+            # Recriar o container
+            curl -s -u "$AUTH" -X POST "$URL/containers" \
               -H 'Content-Type: application/json' \
               -d "{
                 \"name\": \"$NAME\",
-                \"launchConfig\": {
-                  \"imageUuid\": \"docker:$IMAGE\",
-                  \"restartPolicy\": {\"name\": \"always\"},
-                  \"alwaysPullImage\": true,
-                  \"publishAllPorts\": false,
-                  \"ports\": [\"9000:9000/tcp\"]
-                },
-                \"scale\": 1,
-                \"startOnCreate\": true
+                \"imageUuid\": \"docker:$IMAGE\",
+                \"networkMode\": \"managed\",
+                \"restartPolicy\": {\"name\": \"always\"},
+                \"alwaysPullImage\": true,
+                \"startOnCreate\": true,
+                \"publishAllPorts\": false,
+                \"ports\": [\"9000:9000/tcp\"]
               }"
-            echo "✅ Serviço $NAME criado com sucesso."
+
+            echo "✅ Container $NAME recriado com a nova imagem."
+          else
+            echo "🚀 Container $NAME não existe. Criando..."
+            curl -s -u "$AUTH" -X POST "$URL/containers" \
+              -H 'Content-Type: application/json' \
+              -d "{
+                \"name\": \"$NAME\",
+                \"imageUuid\": \"docker:$IMAGE\",
+                \"networkMode\": \"managed\",
+                \"restartPolicy\": {\"name\": \"always\"},
+                \"alwaysPullImage\": true,
+                \"startOnCreate\": true,
+                \"publishAllPorts\": false,
+                \"ports\": [\"9000:9000/tcp\"]
+              }"
+            echo "✅ Container $NAME criado com sucesso."
           fi
