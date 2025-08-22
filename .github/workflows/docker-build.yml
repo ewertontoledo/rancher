@@ -27,9 +27,15 @@ jobs:
           tags: ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest
 
   deploy:
-    runs-on: [self-hosted, dkr-surf-externo] # seu runner
+    runs-on: [self-hosted, dkr-surf-externo]
     needs: build
     steps:
+      - name: Force Docker Pull (garantir imagem mais recente)
+        run: |
+          IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest"
+          echo "🔄 Forçando docker pull da imagem $IMAGE"
+          docker pull "$IMAGE" || true
+
       - name: Deploy to Rancher 1.6 (externo)
         run: |
           set -euo pipefail
