@@ -37,7 +37,7 @@ jobs:
 
           echo "🔎 Buscando PROJECT_ID do Rancher..."
           PROJECTS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-            "${{ secrets.RANCHER_URL }}/v1/projects")
+            "${{ secrets.RANCHER_URL }}/v2-beta/projects")
 
           PROJECT_ID=$(echo "$PROJECTS" | jq -r ".data[] | select(.name==\"$ENV_NAME\") | .id")
 
@@ -50,7 +50,7 @@ jobs:
 
           # Buscar se container já existe
           CONTAINERS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-            "${{ secrets.RANCHER_URL }}/v1/projects/$PROJECT_ID/containers")
+            "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers")
 
           CONTAINER=$(echo "$CONTAINERS" | jq -r ".data[] | select(.name==\"$NAME\")")
 
@@ -63,7 +63,7 @@ jobs:
             echo "Atualizando para nova imagem: $IMAGE"
 
             curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              -X PUT "${{ secrets.RANCHER_URL }}/v1/projects/$PROJECT_ID/containers/$CONTAINER_ID" \
+              -X PUT "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers/$CONTAINER_ID" \
               -H 'Content-Type: application/json' \
               -d "{
                 \"imageUuid\": \"docker:$IMAGE\",
@@ -72,15 +72,15 @@ jobs:
               }"
 
             echo "⏳ Aguardando container subir..."
-            sleep 20
+            sleep 25
 
             STATUS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              "${{ secrets.RANCHER_URL }}/v1/projects/$PROJECT_ID/containers/$CONTAINER_ID" | jq -r ".state")
+              "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers/$CONTAINER_ID" | jq -r ".state")
 
             if [ "$STATUS" != "running" ]; then
               echo "⚠️ Novo deploy falhou (status=$STATUS). Fazendo rollback para imagem antiga: $OLD_IMAGE"
               curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-                -X PUT "${{ secrets.RANCHER_URL }}/v1/projects/$PROJECT_ID/containers/$CONTAINER_ID" \
+                -X PUT "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers/$CONTAINER_ID" \
                 -H 'Content-Type: application/json' \
                 -d "{
                   \"imageUuid\": \"docker:$OLD_IMAGE\",
@@ -94,7 +94,7 @@ jobs:
           else
             echo "🚀 Container $NAME não existe. Criando..."
             curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              -X POST "${{ secrets.RANCHER_URL }}/v1/projects/$PROJECT_ID/containers" \
+              -X POST "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers" \
               -H 'Content-Type: application/json' \
               -d "{
                 \"name\": \"$NAME\",
