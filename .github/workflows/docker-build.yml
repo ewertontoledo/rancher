@@ -26,7 +26,7 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:v1.0.0
+            ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest
 
       - name: Configurar Kubeconfig
         run: |
