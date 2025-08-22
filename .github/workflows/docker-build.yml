@@ -51,19 +51,59 @@ users:
   user:
     token: ${{ secrets.RANCHER_TOKEN }}
 EOF
-          echo "KUBECONFIG=/tmp/kube/config" >> $GITHUB_ENV
+          echo "KUBECONFIG=/tmp/kube/config" >> $GITHUB_ENV   # 👉 garante que kubectl use esse config
 
       - name: Deploy no Rancher (via kubectl)
         run: |
           set -e
+          NAMESPACE=local
+          DEPLOYMENT=poc-teste-app
           IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest"
 
-          echo ">> Substituindo imagem no manifest"
-          sed -i.bak "s|IMAGE_PLACEHOLDER|$IMAGE|g" .k8s/deployment.yaml
+          echo ">> Fazendo deploy da imagem $IMAGE no deployment $DEPLOYMENT"
 
-          echo ">> Aplicando manifests..."
-          kubectl apply -f .k8s/deployment.yaml
-          kubectl apply -f .k8s/service.yaml
+          # backup da versão atual para rollback
+          kubectl -n $NAMESPACE get deployment $DEPLOYMENT -o yaml > /tmp/${DEPLOYMENT}_prev.yaml || true
+
+          # aplicar novo deployment + service
+          cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: $DEPLOYMENT
+  namespace: $NAMESPACE
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: $DEPLOYMENT
+  template:
+    metadata:
+      labels:
+        app: $DEPLOYMENT
+    spec:
+      containers:
+        - name: container-0
+          image: $IMAGE
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 9000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${DEPLOYMENT}-svc
+  namespace: $NAMESPACE
+spec:
+  selector:
+    app: $DEPLOYMENT
+  ports:
+    - name: http
+      protocol: TCP
+      port: 9000
+      targetPort: 9000
+  type: NodePort
+EOF
 
           echo ">> Verificando rollout..."
-          kubectl -n local rollout status deployment/poc-teste-app --timeout=60s
+          if ! kubectl
