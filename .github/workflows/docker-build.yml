@@ -1,4 +1,4 @@
-name: Build, Push and Deploy to Rancher (externo)
+name: Build and Deploy OCI
 
 on:
   push:
@@ -16,57 +16,46 @@ jobs:
 
       - uses: docker/login-action@v3
         with:
-          registry: ${{ secrets.OCI_REGION }}
-          username: ${{ secrets.OCI_USER }}
-          password: ${{ secrets.OCI_PASS }}
+          registry: ${{ secrets.OCI_REGION }}      # ex.: gru.ocir.io
+          username: ${{ secrets.OCI_USER }}        # ex.: grj71pgur80e/usuario@empresa.com
+          password: ${{ secrets.OCI_PASS }}        # Auth Token
 
-      - name: Build & Push
+      - name: Build & Push Image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest
+          tags: |
+            ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest
 
-      - name: Deploy to Rancher (externo)
+      - name: Deploy no Rancher
         run: |
+          set -e
           IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest"
-          NAME="app-poc"
+          SERVICE_NAME="teste"   # mesmo nome que está no Rancher
+          RANCHER_URL="${{ secrets.RANCHER_URL }}"
+          RANCHER_TOKEN="${{ secrets.RANCHER_TOKEN }}"
 
-          # Buscar ID do environment externo
-          ENVIRONMENTS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-            "${{ secrets.RANCHER_URL }}/v2-beta/projects")
+          echo ">> Fazendo deploy da imagem: $IMAGE no serviço $SERVICE_NAME"
+          
+          # salva a imagem atual para rollback
+          CURRENT_IMAGE=$(curl -s -H "Authorization: Bearer $RANCHER_TOKEN" \
+            "$RANCHER_URL/v2-beta/projects/${{ secrets.RANCHER_PROJECT_ID }}/services?name=$SERVICE_NAME" \
+            | jq -r '.data[0].launchConfig.imageUuid' | sed 's/docker://')
 
-          PROJECT_ID=$(echo "$ENVIRONMENTS" | jq -r '.data[] | select(.name=="surf-productin-externo") | .id')
+          echo "Imagem atual: $CURRENT_IMAGE"
 
-          echo "Usando PROJECT_ID=$PROJECT_ID (externo)"
-
-          # Buscar se container já existe
-          CONTAINERS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-            "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers")
-
-          CONTAINER_ID=$(echo "$CONTAINERS" | jq -r ".data[] | select(.name==\"$NAME\") | .id")
-
-          if [ -n "$CONTAINER_ID" ] && [ "$CONTAINER_ID" != "null" ]; then
-            echo "Container $NAME já existe. Atualizando imagem..."
-            curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              -X PUT "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers/$CONTAINER_ID" \
+          # tenta atualizar a imagem
+          if ! curl -s -X PUT -H "Authorization: Bearer $RANCHER_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --data "{\"launchConfig\": {\"imageUuid\": \"docker:$IMAGE\"}, \"scale\": 1}" \
+            "$RANCHER_URL/v2-beta/projects/${{ secrets.RANCHER_PROJECT_ID }}/services/$SERVICE_NAME"; then
+            echo "❌ Deploy falhou, restaurando imagem antiga: $CURRENT_IMAGE"
+            
+            # rollback
+            curl -s -X PUT -H "Authorization: Bearer $RANCHER_TOKEN" \
               -H 'Content-Type: application/json' \
-              -d "{
-                \"imageUuid\": \"docker:$IMAGE\",
-                \"restartPolicy\": {\"name\": \"always\"},
-                \"alwaysPullImage\": true
-              }"
-          else
-            echo "Container $NAME não existe. Criando..."
-            curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              -X POST "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers" \
-              -H 'Content-Type: application/json' \
-              -d "{
-                \"name\": \"$NAME\",
-                \"imageUuid\": \"docker:$IMAGE\",
-                \"restartPolicy\": {\"name\": \"always\"},
-                \"alwaysPullImage\": true,
-                \"publishAllPorts\": false,
-                \"ports\": [\"9000:9000/tcp\"]
-              }"
+              --data "{\"launchConfig\": {\"imageUuid\": \"docker:$CURRENT_IMAGE\"}, \"scale\": 1}" \
+              "$RANCHER_URL/v2-beta/projects/${{ secrets.RANCHER_PROJECT_ID }}/services/$SERVICE_NAME"
+            exit 1
           fi
