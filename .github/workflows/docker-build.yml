@@ -40,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest"
-          NAME="app-poc"
+          NAME="app-poc-teste"
           PROJECT_ID="1a120"
 
           echo "✅ Usando PROJECT_ID=$PROJECT_ID"
