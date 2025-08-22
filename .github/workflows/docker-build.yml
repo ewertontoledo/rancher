@@ -56,7 +56,7 @@ jobs:
         run: |
           set -e
           NAMESPACE=local
-          DEPLOYMENT=poc-teste-app
+          DEPLOYMENT=poc-app
           IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:v1.0.0"
 
           echo ">> Fazendo deploy da imagem $IMAGE no deployment $DEPLOYMENT"
