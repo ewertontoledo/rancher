@@ -33,58 +33,53 @@ jobs:
           IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest"
           NAME="app-poc"
           PROJECT_ID="1a120"
+
           echo "✅ Usando PROJECT_ID=$PROJECT_ID"
 
-          # Buscar se container já existe
-          CONTAINERS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-            "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers")
-          CONTAINER=$(echo "$CONTAINERS" | jq -r ".data[] | select(.name==\"$NAME\")")
+          # Buscar Service pelo nome
+          SERVICE_ID=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
+            "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/services" \
+            | jq -r --arg NAME "$NAME" '.data[] | select(.name==$NAME) | .id')
 
-          if [ -n "$CONTAINER" ] && [ "$CONTAINER" != "null" ]; then
-            CONTAINER_ID=$(echo "$CONTAINER" | jq -r ".id")
-            OLD_IMAGE=$(echo "$CONTAINER" | jq -r ".imageUuid" | sed 's/^docker://')
-            echo "📦 Container $NAME já existe (ID=$CONTAINER_ID)"
-            echo "Imagem atual: $OLD_IMAGE"
-            echo "Atualizando para nova imagem: $IMAGE"
+          if [ -n "$SERVICE_ID" ]; then
+            echo "📦 Serviço $NAME encontrado (ID=$SERVICE_ID). Fazendo upgrade..."
 
             curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              -X PUT "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers/$CONTAINER_ID" \
+              -X POST "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/services/$SERVICE_ID?action=upgrade" \
               -H 'Content-Type: application/json' \
               -d "{
-                \"imageUuid\": \"docker:$IMAGE\",
-                \"restartPolicy\": {\"name\": \"always\"},
-                \"alwaysPullImage\": true
+                \"inServiceStrategy\": {
+                  \"launchConfig\": {
+                    \"imageUuid\": \"docker:$IMAGE\",
+                    \"restartPolicy\": {\"name\": \"always\"},
+                    \"alwaysPullImage\": true
+                  }
+                }
               }"
 
-            echo "⏳ Aguardando container subir..."
-            sleep 20
-            STATUS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers/$CONTAINER_ID" | jq -r ".state")
-            if [ "$STATUS" != "running" ]; then
-              echo "⚠️ Novo deploy falhou (status=$STATUS). Fazendo rollback para imagem antiga: $OLD_IMAGE"
-              curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-                -X PUT "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers/$CONTAINER_ID" \
-                -H 'Content-Type: application/json' \
-                -d "{
-                  \"imageUuid\": \"docker:$OLD_IMAGE\",
-                  \"restartPolicy\": {\"name\": \"always\"},
-                  \"alwaysPullImage\": true
-                }"
-              exit 1
-            fi
-            echo "✅ Deploy atualizado com sucesso."
-          else
-            echo "🚀 Container $NAME não existe. Criando..."
+            echo "⏳ Aguardando upgrade..."
+            sleep 15
+
             curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              -X POST "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers" \
+              -X POST "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/services/$SERVICE_ID?action=finishupgrade"
+
+            echo "✅ Serviço $NAME atualizado com sucesso."
+          else
+            echo "🚀 Serviço $NAME não existe. Criando..."
+            curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
+              -X POST "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/services" \
               -H 'Content-Type: application/json' \
               -d "{
                 \"name\": \"$NAME\",
-                \"imageUuid\": \"docker:$IMAGE\",
-                \"restartPolicy\": {\"name\": \"always\"},
-                \"alwaysPullImage\": true,
-                \"publishAllPorts\": false,
-                \"ports\": [\"9000:9000/tcp\"]
+                \"launchConfig\": {
+                  \"imageUuid\": \"docker:$IMAGE\",
+                  \"restartPolicy\": {\"name\": \"always\"},
+                  \"alwaysPullImage\": true,
+                  \"publishAllPorts\": false,
+                  \"ports\": [\"9000:9000/tcp\"]
+                },
+                \"scale\": 1,
+                \"startOnCreate\": true
               }"
-            echo "✅ Container criado com sucesso."
+            echo "✅ Serviço $NAME criado com sucesso."
           fi
