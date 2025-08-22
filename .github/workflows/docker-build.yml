@@ -6,9 +6,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-deploy:
+  build:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -27,6 +26,10 @@ jobs:
           push: true
           tags: ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest
 
+  deploy:
+    runs-on: [self-hosted, dkr-surf-externo] # seu runner
+    needs: build
+    steps:
       - name: Deploy to Rancher 1.6 (externo)
         run: |
           set -euo pipefail
@@ -35,6 +38,7 @@ jobs:
           PROJECT_ID="1a120"
 
           echo "✅ Usando PROJECT_ID=$PROJECT_ID"
+          echo "🔎 Verificando se container $NAME já existe..."
 
           # Buscar container existente
           CONTAINERS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
@@ -95,5 +99,5 @@ jobs:
                 \"publishAllPorts\": false,
                 \"ports\": [\"9000:9000/tcp\"]
               }"
-            echo "✅ Container criado com sucesso."
+            echo "✅ Container $NAME criado com sucesso."
           fi
