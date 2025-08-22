@@ -31,7 +31,7 @@ jobs:
       - name: Configurar Kubeconfig
         run: |
           mkdir -p /tmp/kube
-          cat > /tmp/kube/config <<EOF
+          cat > /tmp/kube/config <<EOL
 apiVersion: v1
 kind: Config
 clusters:
@@ -50,8 +50,9 @@ users:
 - name: rancher-user
   user:
     token: ${{ secrets.RANCHER_TOKEN }}
-EOF
-          echo "KUBECONFIG=/tmp/kube/config" >> $GITHUB_ENV   # 👉 garante que kubectl use esse config
+EOL
+          chmod 600 /tmp/kube/config
+          echo "KUBECONFIG=/tmp/kube/config" >> $GITHUB_ENV
 
       - name: Deploy no Rancher (via kubectl)
         run: |
@@ -62,48 +63,15 @@ EOF
 
           echo ">> Fazendo deploy da imagem $IMAGE no deployment $DEPLOYMENT"
 
-          # backup da versão atual para rollback
+          # backup do estado anterior
           kubectl -n $NAMESPACE get deployment $DEPLOYMENT -o yaml > /tmp/${DEPLOYMENT}_prev.yaml || true
 
-          # aplicar novo deployment + service
-          cat <<EOF | kubectl apply -f -
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: $DEPLOYMENT
-  namespace: $NAMESPACE
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: $DEPLOYMENT
-  template:
-    metadata:
-      labels:
-        app: $DEPLOYMENT
-    spec:
-      containers:
-        - name: container-0
-          image: $IMAGE
-          imagePullPolicy: Always
-          ports:
-            - containerPort: 9000
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: ${DEPLOYMENT}-svc
-  namespace: $NAMESPACE
-spec:
-  selector:
-    app: $DEPLOYMENT
-  ports:
-    - name: http
-      protocol: TCP
-      port: 9000
-      targetPort: 9000
-  type: NodePort
-EOF
+          # aplica manifests
+          kubectl apply -f .k8s/deployment.yaml
+          kubectl apply -f .k8s/service.yaml
 
           echo ">> Verificando rollout..."
-          if ! kubectl
+          if ! kubectl -n $NAMESPACE rollout status deployment/$DEPLOYMENT --timeout=60s; then
+            echo "❌ Rollout falhou! Restaurando versão anterior..."
+            kubectl apply -f /tmp/${DEPLOYMENT}_prev.yaml || true
+            kubectl -n $NAMESPACE rollout undo dep
