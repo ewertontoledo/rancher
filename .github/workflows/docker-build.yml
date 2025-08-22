@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-deploy:
-    runs-on: [self-hosted, macOS, X64]   # 👉 força rodar no runner local
+    runs-on: [self-hosted, macOS, X64]   # força rodar no runner local
 
     steps:
       - uses: actions/checkout@v4
@@ -27,50 +27,11 @@ jobs:
           push: true
           tags: |
             ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest
-
-      - name: Instalar kubectl (se não existir)
-        run: |
-          if ! command -v kubectl >/dev/null 2>&1;
-name: Build and Deploy OCI
-
-on:
-  push:
-    branches: [ "main" ]
-  workflow_dispatch:
-
-jobs:
-  build-deploy:
-    runs-on: [self-hosted, macOS, X64]   # 👉 força rodar no runner local
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ${{ secrets.OCI_REGION }}      # ex.: gru.ocir.io
-          username: ${{ secrets.OCI_USER }}        # ex.: tenancy/usuario@empresa.com
-          password: ${{ secrets.OCI_PASS }}        # Auth Token
-
-      - name: Build & Push Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: |
-            ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest
-
-      - name: Instalar kubectl (se não existir)
-        run: |
-          if ! command -v kubectl >/dev/null 2>&1; then
-            brew install kubectl || curl -LO "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/darwin/amd64/kubectl" && chmod +x kubectl && sudo mv kubectl /usr/local/bin/
-          fi
 
       - name: Configurar Kubeconfig
         run: |
           mkdir -p /tmp/kube
-          cat <<EOF > /tmp/kube/config
+          cat > /tmp/kube/config <<EOF
 apiVersion: v1
 kind: Config
 clusters:
@@ -95,57 +56,14 @@ EOF
       - name: Deploy no Rancher (via kubectl)
         run: |
           set -e
-          NAMESPACE=local
-          DEPLOYMENT=poc-teste-app
           IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest"
 
-          echo ">> Fazendo deploy da imagem $IMAGE no deployment $DEPLOYMENT"
+          echo ">> Substituindo imagem no manifest"
+          sed -i.bak "s|IMAGE_PLACEHOLDER|$IMAGE|g" .k8s/deployment.yaml
 
-          kubectl -n $NAMESPACE get deployment $DEPLOYMENT -o yaml > /tmp/${DEPLOYMENT}_prev.yaml || true
-
-          cat <<EOF | kubectl apply -f -
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: $DEPLOYMENT
-  namespace: $NAMESPACE
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: $DEPLOYMENT
-  template:
-    metadata:
-      labels:
-        app: $DEPLOYMENT
-    spec:
-      containers:
-        - name: container-0
-          image: $IMAGE
-          imagePullPolicy: Always
-          ports:
-            - containerPort: 9000
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: ${DEPLOYMENT}-svc
-  namespace: $NAMESPACE
-spec:
-  selector:
-    app: $DEPLOYMENT
-  ports:
-    - name: http
-      protocol: TCP
-      port: 9000
-      targetPort: 9000
-  type: NodePort
-EOF
+          echo ">> Aplicando manifests..."
+          kubectl apply -f .k8s/deployment.yaml
+          kubectl apply -f .k8s/service.yaml
 
           echo ">> Verificando rollout..."
-          if ! kubectl -n $NAMESPACE rollout status deployment/$DEPLOYMENT --timeout=60s; then
-            echo "❌ Rollout falhou! Restaurando versão anterior..."
-            kubectl apply -f /tmp/${DEPLOYMENT}_prev.yaml || true
-            kubectl -n $NAMESPACE rollout undo deployment/$DEPLOYMENT || true
-            exit 1
-          fi
+          kubectl -n local rollout status deployment/poc-teste-app --timeout=60s
