@@ -33,54 +33,67 @@ jobs:
           IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest"
           NAME="app-poc"
           PROJECT_ID="1a120"
-          AUTH="${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}"
-          URL="${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID"
 
           echo "✅ Usando PROJECT_ID=$PROJECT_ID"
 
-          # Buscar container pelo nome
-          CONTAINER_ID=$(curl -s -u "$AUTH" "$URL/containers" \
-            | jq -r --arg NAME "$NAME" '.data[] | select(.name==$NAME) | .id')
+          # Buscar container existente
+          CONTAINERS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
+            "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers")
+          CONTAINER=$(echo "$CONTAINERS" | jq -r ".data[] | select(.name==\"$NAME\")")
 
-          if [ -n "$CONTAINER_ID" ] && [ "$CONTAINER_ID" != "null" ]; then
-            echo "📦 Container $NAME encontrado (ID=$CONTAINER_ID). Atualizando imagem..."
+          if [ -n "$CONTAINER" ] && [ "$CONTAINER" != "null" ]; then
+            CONTAINER_ID=$(echo "$CONTAINER" | jq -r ".id")
+            OLD_IMAGE=$(echo "$CONTAINER" | jq -r ".imageUuid" | sed 's/^docker://')
 
-            # Parar o container
-            curl -s -u "$AUTH" -X POST "$URL/containers/$CONTAINER_ID?action=stop"
-            sleep 5
+            echo "📦 Container $NAME já existe (ID=$CONTAINER_ID)"
+            echo "Imagem atual: $OLD_IMAGE"
+            echo "Nova imagem: $IMAGE"
 
-            # Remover o container
-            curl -s -u "$AUTH" -X DELETE "$URL/containers/$CONTAINER_ID"
-            sleep 5
-
-            # Recriar o container
-            curl -s -u "$AUTH" -X POST "$URL/containers" \
+            # Atualizar imagem
+            curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
+              -X PUT "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers/$CONTAINER_ID" \
               -H 'Content-Type: application/json' \
               -d "{
-                \"name\": \"$NAME\",
                 \"imageUuid\": \"docker:$IMAGE\",
-                \"networkMode\": \"managed\",
                 \"restartPolicy\": {\"name\": \"always\"},
-                \"alwaysPullImage\": true,
-                \"startOnCreate\": true,
-                \"publishAllPorts\": false,
-                \"ports\": [\"9000:9000/tcp\"]
+                \"alwaysPullImage\": true
               }"
 
-            echo "✅ Container $NAME recriado com a nova imagem."
+            echo "⏳ Aguardando container subir..."
+            sleep 20
+
+            STATUS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
+              "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers/$CONTAINER_ID" | jq -r ".state")
+
+            if [ "$STATUS" != "running" ]; then
+              echo "⚠️ Deploy falhou (status=$STATUS). Fazendo rollback para imagem antiga: $OLD_IMAGE"
+
+              curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
+                -X PUT "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers/$CONTAINER_ID" \
+                -H 'Content-Type: application/json' \
+                -d "{
+                  \"imageUuid\": \"docker:$OLD_IMAGE\",
+                  \"restartPolicy\": {\"name\": \"always\"},
+                  \"alwaysPullImage\": true
+                }"
+
+              echo "🔙 Rollback aplicado. Verifique logs do Rancher."
+              exit 1
+            fi
+
+            echo "✅ Deploy atualizado com sucesso."
           else
             echo "🚀 Container $NAME não existe. Criando..."
-            curl -s -u "$AUTH" -X POST "$URL/containers" \
+            curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
+              -X POST "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers" \
               -H 'Content-Type: application/json' \
               -d "{
                 \"name\": \"$NAME\",
                 \"imageUuid\": \"docker:$IMAGE\",
-                \"networkMode\": \"managed\",
                 \"restartPolicy\": {\"name\": \"always\"},
                 \"alwaysPullImage\": true,
-                \"startOnCreate\": true,
                 \"publishAllPorts\": false,
                 \"ports\": [\"9000:9000/tcp\"]
               }"
-            echo "✅ Container $NAME criado com sucesso."
+            echo "✅ Container criado com sucesso."
           fi
