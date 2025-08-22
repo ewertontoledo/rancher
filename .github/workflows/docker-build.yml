@@ -1,9 +1,7 @@
-name: Build, Push and Deploy to Rancher (externo)
+name: Build, Push and Deploy (local Rancher)
 
 on:
-  push:
-    branches: [ "main" ]
-  workflow_dispatch:
+  workflow_dispatch: # dispara manualmente no Actions
 
 jobs:
   build-deploy:
@@ -27,46 +25,63 @@ jobs:
           push: true
           tags: ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest
 
-      - name: Deploy to Rancher (externo)
+      - name: Deploy no Rancher Local
         run: |
           IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest"
-          NAME="app-poc-teste"
+          PROJECT_ID="1a7"   # seu environment teste-externo
+          STACK_NAME="stack-teste"
+          SERVICE_NAME="app-poc"
 
-          # Buscar ID do environment externo
-          ENVIRONMENTS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-            "${{ secrets.RANCHER_URL }}/v2-beta/projects")
+          echo ">> Criando stack se não existir..."
+          STACK_ID=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
+            "http://localhost:8080/v2-beta/projects/$PROJECT_ID/stacks?name=$STACK_NAME" \
+            | jq -r '.data[0].id')
 
-          PROJECT_ID=$(echo "$ENVIRONMENTS" | jq -r '.data[] | select(.name=="surf-productin-externo") | .id')
-
-          echo "Usando PROJECT_ID=$PROJECT_ID (externo)"
-
-          # Buscar se container já existe
-          CONTAINERS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-            "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers")
-
-          CONTAINER_ID=$(echo "$CONTAINERS" | jq -r ".data[] | select(.name==\"$NAME\") | .id")
-
-          if [ -n "$CONTAINER_ID" ] && [ "$CONTAINER_ID" != "null" ]; then
-            echo "Container $NAME já existe. Atualizando imagem..."
-            curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              -X PUT "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers/$CONTAINER_ID" \
-              -H 'Content-Type: application/json' \
-              -d "{
-                \"imageUuid\": \"docker:$IMAGE\",
-                \"restartPolicy\": {\"name\": \"always\"},
-                \"alwaysPullImage\": true
-              }"
+          if [ "$STACK_ID" = "null" ] || [ -z "$STACK_ID" ]; then
+            STACK_ID=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
+              -X POST -H "Content-Type: application/json" \
+              -d "{\"name\":\"$STACK_NAME\"}" \
+              "http://localhost:8080/v2-beta/projects/$PROJECT_ID/stacks" \
+              | jq -r '.id')
+            echo "Criada nova stack: $STACK_ID"
           else
-            echo "Container $NAME não existe. Criando..."
-            curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              -X POST "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers" \
-              -H 'Content-Type: application/json' \
+            echo "Stack já existe: $STACK_ID"
+          fi
+
+          echo ">> Criando ou atualizando service $SERVICE_NAME..."
+          SERVICE_ID=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
+            "http://localhost:8080/v2-beta/projects/$PROJECT_ID/services?name=$SERVICE_NAME" \
+            | jq -r '.data[0].id')
+
+          if [ "$SERVICE_ID" = "null" ] || [ -z "$SERVICE_ID" ]; then
+            echo "Service não existe. Criando..."
+            SERVICE_ID=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
+              -X POST -H "Content-Type: application/json" \
               -d "{
-                \"name\": \"$NAME\",
-                \"imageUuid\": \"docker:$IMAGE\",
-                \"restartPolicy\": {\"name\": \"always\"},
-                \"alwaysPullImage\": true,
-                \"publishAllPorts\": false,
-                \"ports\": [\"9000:9000/tcp\"]
-              }"
+                \"name\":\"$SERVICE_NAME\",
+                \"stackId\":\"$STACK_ID\",
+                \"scale\":1,
+                \"launchConfig\":{
+                  \"imageUuid\":\"docker:$IMAGE\",
+                  \"ports\":[\"9000:9000/tcp\"]
+                }
+              }" \
+              "http://localhost:8080/v2-beta/projects/$PROJECT_ID/services" \
+              | jq -r '.id')
+            echo "Service criado: $SERVICE_ID"
+
+            echo ">> Ativando service..."
+            curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
+              -X POST "http://localhost:8080/v2-beta/projects/$PROJECT_ID/services/$SERVICE_ID/?action=activate"
+          else
+            echo "Service já existe. Atualizando imagem..."
+            curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
+              -X PUT -H "Content-Type: application/json" \
+              -d "{
+                \"launchConfig\":{
+                  \"imageUuid\":\"docker:$IMAGE\",
+                  \"ports\":[\"9000:9000/tcp\"]
+                }
+              }" \
+              "http://localhost:8080/v2-beta/projects/$PROJECT_ID/services/$SERVICE_ID"
           fi
