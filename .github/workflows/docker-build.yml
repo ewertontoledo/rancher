@@ -55,7 +55,7 @@ jobs:
           set -e
           NAMESPACE=local
           DEPLOYMENT=poc-app
-          IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:v1.0.0"
+          IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest"
           echo ">> Fazendo deploy da imagem $IMAGE no deployment $DEPLOYMENT"
           kubectl -n $NAMESPACE get deployment $DEPLOYMENT -o yaml > /tmp/${DEPLOYMENT}_prev.yaml || true
           # Deployment
