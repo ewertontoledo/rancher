@@ -46,7 +46,6 @@ jobs:
           echo "✅ Usando PROJECT_ID=$PROJECT_ID"
           echo "🔎 Verificando se container $NAME já existe..."
 
-          # Buscar container existente
           CONTAINERS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
             "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers")
           CONTAINER=$(echo "$CONTAINERS" | jq -r ".data[] | select(.name==\"$NAME\")")
@@ -59,7 +58,12 @@ jobs:
             echo "Imagem atual: $OLD_IMAGE"
             echo "Nova imagem: $IMAGE"
 
-            # Atualizar imagem
+            if [ "$OLD_IMAGE" = "$IMAGE" ]; then
+              echo "ℹ️ Imagem já está na versão mais recente. Nenhuma atualização necessária."
+              exit 0
+            fi
+
+            echo "⬆️ Atualizando imagem do container..."
             curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
               -X PUT "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers/$CONTAINER_ID" \
               -H 'Content-Type: application/json' \
@@ -70,40 +74,15 @@ jobs:
               }"
 
             echo "⏳ Aguardando container subir..."
-            sleep 20
+            for i in {1..12}; do
+              STATUS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
+                "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers/$CONTAINER_ID" | jq -r ".state")
+              echo "   -> Tentativa $i: status=$STATUS"
+              if [ "$STATUS" = "running" ]; then
+                echo "✅ Deploy atualizado com sucesso."
+                exit 0
+              fi
+              sleep 5
+            done
 
-            STATUS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers/$CONTAINER_ID" | jq -r ".state")
-
-            if [ "$STATUS" != "running" ]; then
-              echo "⚠️ Deploy falhou (status=$STATUS). Fazendo rollback para imagem antiga: $OLD_IMAGE"
-
-              curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-                -X PUT "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers/$CONTAINER_ID" \
-                -H 'Content-Type: application/json' \
-                -d "{
-                  \"imageUuid\": \"docker:$OLD_IMAGE\",
-                  \"restartPolicy\": {\"name\": \"always\"},
-                  \"alwaysPullImage\": true
-                }"
-
-              echo "🔙 Rollback aplicado. Verifique logs do Rancher."
-              exit 1
-            fi
-
-            echo "✅ Deploy atualizado com sucesso."
-          else
-            echo "🚀 Container $NAME não existe. Criando..."
-            curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              -X POST "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers" \
-              -H 'Content-Type: application/json' \
-              -d "{
-                \"name\": \"$NAME\",
-                \"imageUuid\": \"docker:$IMAGE\",
-                \"restartPolicy\": {\"name\": \"always\"},
-                \"alwaysPullImage\": true,
-                \"publishAllPorts\": false,
-                \"ports\": [\"9000:9000/tcp\"]
-              }"
-            echo "✅ Container $NAME criado com sucesso."
-          fi
+            echo "⚠️ Deploy não chegou em estado running. Fazendo rollback para imagem antiga: $OLD
