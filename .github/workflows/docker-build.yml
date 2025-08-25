@@ -53,7 +53,7 @@ jobs:
       - name: Deploy no Rancher (via kubectl)
         run: |
           set -e
-          NAMESPACE=local
+          NAMESPACE=default
           DEPLOYMENT=poc-app
           IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest"
           echo ">> Fazendo deploy da imagem $IMAGE no deployment $DEPLOYMENT"
