@@ -1,4 +1,4 @@
-name: Build, Push and Deploy to Rancher (externo)
+name: Build and Deploy OCI
 
 on:
   push:
@@ -6,8 +6,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  build-deploy:
+    runs-on: [self-hosted, macOS, X64]   # força rodar no runner local
+
     steps:
       - uses: actions/checkout@v4
 
@@ -15,74 +16,96 @@ jobs:
 
       - uses: docker/login-action@v3
         with:
-          registry: ${{ secrets.OCI_REGION }}
-          username: ${{ secrets.OCI_USER }}
-          password: ${{ secrets.OCI_PASS }}
+          registry: ${{ secrets.OCI_REGION }}      # ex.: gru.ocir.io
+          username: ${{ secrets.OCI_USER }}        # ex.: tenancy/usuario@empresa.com
+          password: ${{ secrets.OCI_PASS }}        # Auth Token
 
-      - name: Build & Push
+      - name: Build & Push Image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest
-
-  deploy:
-    runs-on: [self-hosted, dkr-surf-externo]
-    needs: build
-    steps:
-      - name: Force Docker Pull (garantir imagem mais recente)
+          tags: |
+            ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest
+      - name: Configurar Kubeconfig
         run: |
-          IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest"
-          echo "🔄 Forçando docker pull da imagem $IMAGE"
-          docker pull "$IMAGE" || true
-
-      - name: Deploy to Rancher 1.6 (externo)
+          mkdir -p /tmp/kube
+          echo "apiVersion: v1" > /tmp/kube/config
+          echo "kind: Config" >> /tmp/kube/config
+          echo "clusters:" >> /tmp/kube/config
+          echo "- cluster:" >> /tmp/kube/config
+          echo "    server: ${{ secrets.RANCHER_URL }}/k8s/clusters/local" >> /tmp/kube/config
+          echo "    insecure-skip-tls-verify: true" >> /tmp/kube/config
+          echo "  name: local" >> /tmp/kube/config
+          echo "contexts:" >> /tmp/kube/config
+          echo "- context:" >> /tmp/kube/config
+          echo "    cluster: local" >> /tmp/kube/config
+          echo "    user: rancher-user" >> /tmp/kube/config
+          echo "    namespace: local" >> /tmp/kube/config
+          echo "  name: local" >> /tmp/kube/config
+          echo "current-context: local" >> /tmp/kube/config
+          echo "users:" >> /tmp/kube/config
+          echo "- name: rancher-user" >> /tmp/kube/config
+          echo "  user:" >> /tmp/kube/config
+          echo "    token: ${{ secrets.RANCHER_TOKEN }}" >> /tmp/kube/config
+          chmod 600 /tmp/kube/config
+          echo "KUBECONFIG=/tmp/kube/config" >> $GITHUB_ENV
+      - name: Deploy no Rancher (via kubectl)
         run: |
-          set -euo pipefail
-          IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest"
-          NAME="app-poc-teste"
-          PROJECT_ID="1a120"
-
-          echo "✅ Usando PROJECT_ID=$PROJECT_ID"
-          echo "🔎 Verificando se container $NAME já existe..."
-
-          CONTAINERS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-            "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers")
-          CONTAINER=$(echo "$CONTAINERS" | jq -r ".data[] | select(.name==\"$NAME\")")
-
-          if [ -n "$CONTAINER" ] && [ "$CONTAINER" != "null" ]; then
-            CONTAINER_ID=$(echo "$CONTAINER" | jq -r ".id")
-            OLD_IMAGE=$(echo "$CONTAINER" | jq -r ".imageUuid" | sed 's/^docker://')
-
-            echo "📦 Container $NAME já existe (ID=$CONTAINER_ID)"
-            echo "Imagem atual: $OLD_IMAGE"
-            echo "Nova imagem: $IMAGE"
-
-            if [ "$OLD_IMAGE" = "$IMAGE" ]; then
-              echo "ℹ️ Imagem já está na versão mais recente. Nenhuma atualização necessária."
-              exit 0
+          set -e
+          NAMESPACE=local
+          DEPLOYMENT=poc-app
+          IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:v1.0.0"
+          echo ">> Fazendo deploy da imagem $IMAGE no deployment $DEPLOYMENT"
+          kubectl -n $NAMESPACE get deployment $DEPLOYMENT -o yaml > /tmp/${DEPLOYMENT}_prev.yaml || true
+          # Deployment
+          echo "apiVersion: apps/v1" > /tmp/deployment.yaml
+          echo "kind: Deployment" >> /tmp/deployment.yaml
+          echo "metadata:" >> /tmp/deployment.yaml
+          echo "  name: $DEPLOYMENT" >> /tmp/deployment.yaml
+          echo "  namespace: $NAMESPACE" >> /tmp/deployment.yaml
+          echo "spec:" >> /tmp/deployment.yaml
+          echo "  replicas: 1" >> /tmp/deployment.yaml
+          echo "  selector:" >> /tmp/deployment.yaml
+          echo "    matchLabels:" >> /tmp/deployment.yaml
+          echo "      app: $DEPLOYMENT" >> /tmp/deployment.yaml
+          echo "  template:" >> /tmp/deployment.yaml
+          echo "    metadata:" >> /tmp/deployment.yaml
+          echo "      labels:" >> /tmp/deployment.yaml
+          echo "        app: $DEPLOYMENT" >> /tmp/deployment.yaml
+          echo "    spec:" >> /tmp/deployment.yaml
+          echo "      containers:" >> /tmp/deployment.yaml
+          echo "      - name: container-0" >> /tmp/deployment.yaml
+          echo "        image: $IMAGE" >> /tmp/deployment.yaml
+          echo "        imagePullPolicy: Always" >> /tmp/deployment.yaml
+          echo "        ports:" >> /tmp/deployment.yaml
+          echo "        - containerPort: 9000" >> /tmp/deployment.yaml
+          # Service
+          echo "apiVersion: v1" > /tmp/service.yaml
+          echo "kind: Service" >> /tmp/service.yaml
+          echo "metadata:" >> /tmp/service.yaml
+          echo "  name: ${DEPLOYMENT}-svc" >> /tmp/service.yaml
+          echo "  namespace: $NAMESPACE" >> /tmp/service.yaml
+          echo "spec:" >> /tmp/service.yaml
+          echo "  selector:" >> /tmp/service.yaml
+          echo "    app: $DEPLOYMENT" >> /tmp/service.yaml
+          echo "  ports:" >> /tmp/service.yaml
+          echo "  - name: http" >> /tmp/service.yaml
+          echo "    protocol: TCP" >> /tmp/service.yaml
+          echo "    port: 9000" >> /tmp/service.yaml
+          echo "    targetPort: 9000" >> /tmp/service.yaml
+          echo "  type: NodePort" >> /tmp/service.yaml
+          kubectl apply -f /tmp/deployment.yaml
+          kubectl apply -f /tmp/service.yaml
+          echo ">> Verificando rollout..."
+          if ! kubectl -n $NAMESPACE rollout status deployment/$DEPLOYMENT --timeout=60s; then
+            echo "❌ Rollout falhou!"
+            if kubectl -n $NAMESPACE rollout history deployment/$DEPLOYMENT >/dev/null 2>&1; then
+              echo ">> Restaurando versão anterior..."
+              kubectl apply -f /tmp/${DEPLOYMENT}_prev.yaml || true
+              kubectl -n $NAMESPACE rollout undo deployment/$DEPLOYMENT || true
+            else
+              echo ">> Nenhuma versão anterior encontrada, nada para restaurar."
             fi
-
-            echo "⬆️ Atualizando imagem do container..."
-            curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-              -X PUT "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers/$CONTAINER_ID" \
-              -H 'Content-Type: application/json' \
-              -d "{
-                \"imageUuid\": \"docker:$IMAGE\",
-                \"restartPolicy\": {\"name\": \"always\"},
-                \"alwaysPullImage\": true
-              }"
-
-            echo "⏳ Aguardando container subir..."
-            for i in {1..12}; do
-              STATUS=$(curl -s -u "${{ secrets.RANCHER_ACCESS_KEY }}:${{ secrets.RANCHER_SECRET_KEY }}" \
-                "${{ secrets.RANCHER_URL }}/v2-beta/projects/$PROJECT_ID/containers/$CONTAINER_ID" | jq -r ".state")
-              echo "   -> Tentativa $i: status=$STATUS"
-              if [ "$STATUS" = "running" ]; then
-                echo "✅ Deploy atualizado com sucesso."
-                exit 0
-              fi
-              sleep 5
-            done
-
-            echo "⚠️ Deploy não chegou em estado running. Fazendo rollback para imagem antiga: $OLD
+            exit 1
+          fi
