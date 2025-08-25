@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-deploy:
-    runs-on: [self-hosted, macOS, X64]   # força rodar no runner local
+    runs-on: [self-hosted, macOS, X64]
 
     steps:
       - uses: actions/checkout@v4
@@ -16,9 +16,9 @@ jobs:
 
       - uses: docker/login-action@v3
         with:
-          registry: ${{ secrets.OCI_REGION }}      # ex.: gru.ocir.io
-          username: ${{ secrets.OCI_USER }}        # ex.: tenancy/usuario@empresa.com
-          password: ${{ secrets.OCI_PASS }}        # Auth Token
+          registry: ${{ secrets.OCI_REGION }}
+          username: ${{ secrets.OCI_USER }}
+          password: ${{ secrets.OCI_PASS }}
 
       - name: Build & Push Image
         uses: docker/build-push-action@v5
@@ -27,22 +27,23 @@ jobs:
           push: true
           tags: |
             ${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest
+
       - name: Configurar Kubeconfig
         run: |
           mkdir -p /tmp/kube
           echo "apiVersion: v1" > /tmp/kube/config
           echo "kind: Config" >> /tmp/kube/config
           echo "clusters:" >> /tmp/kube/config
-          echo "- cluster:" >> /tmp/kube/config
+          echo "- name: local" >> /tmp/kube/config
+          echo "  cluster:" >> /tmp/kube/config
           echo "    server: ${{ secrets.RANCHER_URL }}/k8s/clusters/local" >> /tmp/kube/config
-          echo "    insecure-skip-tls-verify: true" >> /tmp/kube/config
-          echo "  name: local" >> /tmp/kube/config
+          echo "    certificate-authority-data: ${{ secrets.RANCHER_CA }}" >> /tmp/kube/config
           echo "contexts:" >> /tmp/kube/config
-          echo "- context:" >> /tmp/kube/config
+          echo "- name: local" >> /tmp/kube/config
+          echo "  context:" >> /tmp/kube/config
           echo "    cluster: local" >> /tmp/kube/config
           echo "    user: rancher-user" >> /tmp/kube/config
-          echo "    namespace: local" >> /tmp/kube/config
-          echo "  name: local" >> /tmp/kube/config
+          echo "    namespace: default" >> /tmp/kube/config
           echo "current-context: local" >> /tmp/kube/config
           echo "users:" >> /tmp/kube/config
           echo "- name: rancher-user" >> /tmp/kube/config
@@ -50,6 +51,7 @@ jobs:
           echo "    token: ${{ secrets.RANCHER_TOKEN }}" >> /tmp/kube/config
           chmod 600 /tmp/kube/config
           echo "KUBECONFIG=/tmp/kube/config" >> $GITHUB_ENV
+
       - name: Deploy no Rancher (via kubectl)
         run: |
           set -e
@@ -57,7 +59,9 @@ jobs:
           DEPLOYMENT=poc-app
           IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest"
           echo ">> Fazendo deploy da imagem $IMAGE no deployment $DEPLOYMENT"
+
           kubectl -n $NAMESPACE get deployment $DEPLOYMENT -o yaml > /tmp/${DEPLOYMENT}_prev.yaml || true
+
           # Deployment
           echo "apiVersion: apps/v1" > /tmp/deployment.yaml
           echo "kind: Deployment" >> /tmp/deployment.yaml
@@ -80,6 +84,7 @@ jobs:
           echo "        imagePullPolicy: Always" >> /tmp/deployment.yaml
           echo "        ports:" >> /tmp/deployment.yaml
           echo "        - containerPort: 9000" >> /tmp/deployment.yaml
+
           # Service
           echo "apiVersion: v1" > /tmp/service.yaml
           echo "kind: Service" >> /tmp/service.yaml
@@ -95,8 +100,10 @@ jobs:
           echo "    port: 9000" >> /tmp/service.yaml
           echo "    targetPort: 9000" >> /tmp/service.yaml
           echo "  type: NodePort" >> /tmp/service.yaml
+
           kubectl apply -f /tmp/deployment.yaml
           kubectl apply -f /tmp/service.yaml
+
           echo ">> Verificando rollout..."
           if ! kubectl -n $NAMESPACE rollout status deployment/$DEPLOYMENT --timeout=60s; then
             echo "❌ Rollout falhou!"
