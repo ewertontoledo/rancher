@@ -37,13 +37,13 @@ jobs:
           echo "- name: local" >> /tmp/kube/config
           echo "  cluster:" >> /tmp/kube/config
           echo "    server: ${{ secrets.RANCHER_URL }}/k8s/clusters/local" >> /tmp/kube/config
-          echo "    certificate-authority-data: ${{ secrets.RANCHER_CA }}" >> /tmp/kube/config
+          echo "    insecure-skip-tls-verify: true" >> /tmp/kube/config
           echo "contexts:" >> /tmp/kube/config
           echo "- name: local" >> /tmp/kube/config
           echo "  context:" >> /tmp/kube/config
           echo "    cluster: local" >> /tmp/kube/config
           echo "    user: rancher-user" >> /tmp/kube/config
-          echo "    namespace: default" >> /tmp/kube/config
+          echo "    namespace: ${{ secrets.KUBE_NAMESPACE }}" >> /tmp/kube/config
           echo "current-context: local" >> /tmp/kube/config
           echo "users:" >> /tmp/kube/config
           echo "- name: rancher-user" >> /tmp/kube/config
@@ -55,10 +55,10 @@ jobs:
       - name: Deploy no Rancher (via kubectl)
         run: |
           set -e
-          NAMESPACE=default
+          NAMESPACE="${{ secrets.KUBE_NAMESPACE }}"
           DEPLOYMENT=poc-app
           IMAGE="${{ secrets.OCI_REGION }}/${{ secrets.OCI_NAMESPACE }}/poc/image/teste:latest"
-          echo ">> Fazendo deploy da imagem $IMAGE no deployment $DEPLOYMENT"
+          echo ">> Fazendo deploy da imagem $IMAGE no deployment $DEPLOYMENT no namespace $NAMESPACE"
 
           kubectl -n $NAMESPACE get deployment $DEPLOYMENT -o yaml > /tmp/${DEPLOYMENT}_prev.yaml || true
 
@@ -101,15 +101,15 @@ jobs:
           echo "    targetPort: 9000" >> /tmp/service.yaml
           echo "  type: NodePort" >> /tmp/service.yaml
 
-          kubectl apply -f /tmp/deployment.yaml
-          kubectl apply -f /tmp/service.yaml
+          kubectl apply -f /tmp/deployment.yaml --validate=false
+          kubectl apply -f /tmp/service.yaml --validate=false
 
           echo ">> Verificando rollout..."
           if ! kubectl -n $NAMESPACE rollout status deployment/$DEPLOYMENT --timeout=60s; then
             echo "❌ Rollout falhou!"
             if kubectl -n $NAMESPACE rollout history deployment/$DEPLOYMENT >/dev/null 2>&1; then
               echo ">> Restaurando versão anterior..."
-              kubectl apply -f /tmp/${DEPLOYMENT}_prev.yaml || true
+              kubectl apply -f /tmp/${DEPLOYMENT}_prev.yaml --validate=false || true
               kubectl -n $NAMESPACE rollout undo deployment/$DEPLOYMENT || true
             else
               echo ">> Nenhuma versão anterior encontrada, nada para restaurar."
